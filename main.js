@@ -440,6 +440,7 @@ function onResize() {
 // See: https://threejs.org/docs/?q=raycas#api/en/core/Raycaster
 let isCharacterReady = true;
 
+// Jump animation for side characters like pickachu, bulbasaur, etc.
 function jumpCharacter(meshID) {
   if (!isCharacterReady) return;
 

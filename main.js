@@ -745,7 +745,7 @@ function handleContinuousMovement() {
     }
     if (pressedButtons.down) {
       playerVelocity.z -= MOVE_SPEED;
-      targetRotation = 0;
+      targetRotation = -Math.PI;
     }
     if (pressedButtons.left) {
       playerVelocity.x += MOVE_SPEED;

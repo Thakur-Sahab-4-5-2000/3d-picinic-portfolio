@@ -169,6 +169,10 @@ const modalContent = {
     content:
       " Picnics are my thanggg don't @ me. Lying down with some good grape juice inna wine glass and a nice book at a park is my total vibe. If this isn't max aura points 💯 idk what is.",
   },
+  Chest: {
+    title: "Treasure Chest",
+    content: "Yarr! Ye found me treasure chest! But alas, it's empty. The real treasure be the friends we made along the way!",
+  }
 };
 
 function showModal(id) {

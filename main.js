@@ -1,10 +1,16 @@
+// Core imports
+// - three: main 3D library
+// - OrbitControls: user camera controls (mouse/touch)
+// - GLTFLoader: loads .glb / .gltf model files
+// - Octree, Capsule: helper math/physics utilities from three/examples
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { Octree } from "three/addons/math/Octree.js";
 import { Capsule } from "three/addons/math/Capsule.js";
 
-//Audio with Howler.js
+// Audio with Howler.js
+// `sounds` stores Howl objects for playback of background music and SFX
 const sounds = {
   backgroundMusic: new Howl({
     src: ["./sfx/music.ogg"],
@@ -32,9 +38,17 @@ const sounds = {
   }),
 };
 
-let touchHappened = false;
+// Notes on audio:
+// - Howl instances begin loading when created (preload: true).
+// - Browsers often block autoplay; playback is invoked after a user gesture
+//   (see the enterButton click handler later which starts background music).
+// - `isMuted` controls whether playSound actually calls Howl.play().
 
-let isMuted = false;
+// Input flags
+let touchHappened = false; // true when a touch interaction has occurred (used to prevent double handling)
+
+// Audio mute state
+let isMuted = false; // toggle to silence audio
 
 function playSound(soundId) {
   if (!isMuted && sounds[soundId]) {
@@ -48,29 +62,38 @@ function stopSound(soundId) {
   }
 }
 
-//three.js setup
+// Small helpers to guard audio playback; keep calls centralized so mute
+// behavior is easy to enforce and change in one place.
+
+// three.js setup
+// Create the main scene and set a background color
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xaec972);
+// Get the canvas element from the HTML where we'll render the scene
 const canvas = document.getElementById("experience-canvas");
+// Track current viewport sizes for camera/renderer updates
 const sizes = {
   width: window.innerWidth,
   height: window.innerHeight,
 };
 
-// Physics stuff
-const GRAVITY = 30;
-const CAPSULE_RADIUS = 0.35;
-const CAPSULE_HEIGHT = 1;
-const JUMP_HEIGHT = 11;
-const MOVE_SPEED = 7;
+// Physics configuration and runtime state
+// Constants used for player physics simulation
+const GRAVITY = 30; // gravitational acceleration applied when in air
+const CAPSULE_RADIUS = 0.35; // collision capsule radius
+const CAPSULE_HEIGHT = 1; // collision capsule height
+const JUMP_HEIGHT = 11; // initial upward velocity when jumping
+const MOVE_SPEED = 7; // horizontal movement speed
 
+// Character runtime state
 let character = {
-  instance: null,
+  instance: null, // the Object3D used for character position/rotation
   isMoving: false,
   spawnPosition: new THREE.Vector3(),
 };
-let targetRotation = Math.PI / 2;
+let targetRotation = Math.PI / 2; // desired yaw orientation
 
+// Collision structure: octree for environment, capsule for player
 const colliderOctree = new Octree();
 const playerCollider = new Capsule(
   new THREE.Vector3(0, CAPSULE_RADIUS, 0),
@@ -78,20 +101,26 @@ const playerCollider = new Capsule(
   CAPSULE_RADIUS
 );
 
+// Player physics state
 let playerVelocity = new THREE.Vector3();
-let playerOnFloor = false;
+let playerOnFloor = false; // set true when collision normal indicates floor contact
 
-// Renderer Stuff
-// See: https://threejs.org/docs/?q=render#api/en/constants/Renderer
+// Renderer configuration
+// Create WebGL renderer bound to the canvas element and enable antialiasing
+// Tone mapping and shadow map settings improve final image quality
+// See threejs docs for renderer options
 const renderer = new THREE.WebGLRenderer({
   canvas: canvas,
   antialias: true,
 });
 
+// Set renderer viewport and pixel ratio to look sharp on high-DPI displays
 renderer.setSize(sizes.width, sizes.height);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Shadow map configuration
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.shadowMap.enabled = true;
+// Optional filmic tone mapping for nicer colors
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.7;
 
@@ -240,41 +269,54 @@ const loader = new GLTFLoader(manager);
 loader.load(
   "./park.glb",
   function (glb) {
+    // Traverse all nodes in the loaded GLTF scene. We use traversal to:
+    //  - collect interactive nodes (names listed in intersectObjectsNames)
+    //  - enable shadows on meshes
+    //  - detect the special 'Character' mesh and set up its pivot & collider
     glb.scene.traverse((child) => {
+      // If this child's name is in the list of interactive names, add it
+      // to the array used by the raycaster.
       if (intersectObjectsNames.includes(child.name)) {
         intersectObjects.push(child);
       }
+
+      // Log each traversed node for debugging so you can see the model
+      // hierarchy in the browser console.
       console.log(child.name);
+
+      // If the node is a renderable mesh, enable shadow casting/receiving.
       if (child.isMesh) {
         child.castShadow = true;
         child.receiveShadow = true;
       }
 
+      // Special-case: when we find the 'Character' mesh we create a pivot
+      // object to act as the logical character root. The visual mesh is
+      // reparented under the pivot so yaw rotations apply to the pivot
+      // while the visual child can keep its X rotation (so it doesn't look
+      // down when we yaw).
       if (child.name === "Character" || child.name === "character") {
         console.log("Found Character");
-        // Create a pivot so we can yaw (rotate Y) the pivot while keeping
-        // the visual mesh rotated on X (so it doesn't 'look down')
         const pivot = new THREE.Object3D();
-        // Place pivot at the child's world position
         pivot.position.copy(child.position);
-        // Add pivot to the scene and reparent the child under the pivot
         scene.add(pivot);
         pivot.add(child);
-        // Reset child's local position so it's positioned relative to pivot
+        // Reset visual mesh local transform so it's positioned relative to
+        // the pivot (pivot is the true world-space reference).
         child.position.set(0, 0, 0);
 
-        // Normalize visual orientation/scale on the child (visual mesh)
-        child.rotation.x = 90 * (Math.PI / 180); // keep lying/standing rotation you prefer
+        // Normalize visual orientation (convert degrees to radians).
+        child.rotation.x = 90 * (Math.PI / 180);
         child.rotation.z = 0;
-        // child.scale.set(1, 1, 1);
         child.updateMatrixWorld(true);
 
-        // Use the pivot as the character.instance so movement rotates the pivot (yaw)
+        // Store references used by the movement and respawn logic.
         character.spawnPosition.copy(pivot.position);
-        character.instance = pivot;
-        // Keep a reference to the visual mesh so we can enforce its X/Z and scale
-        character.visual = child;
+        character.instance = pivot; // movement rotates this pivot
+        character.visual = child; // visual mesh for cosmetic tweaks
 
+        // Align the physics capsule with the pivot's world position so
+        // collisions match the visible character.
         playerCollider.start
           .copy(pivot.position)
           .add(new THREE.Vector3(0, CAPSULE_RADIUS, 0));
@@ -282,6 +324,10 @@ loader.load(
           .copy(pivot.position)
           .add(new THREE.Vector3(0, CAPSULE_HEIGHT, 0));
       }
+
+      // Build the collision octree from the 'Ground_Collider' mesh and hide
+      // the collider geometry so it doesn't render but is available for
+      // collision queries.
       if (child.name === "Ground_Collider") {
         colliderOctree.fromGraphNode(child);
         child.visible = false;
@@ -321,8 +367,27 @@ scene.add(sun);
 const light = new THREE.AmbientLight(0x404040, 2.7);
 scene.add(light);
 
-// Camera Stuff
-// See: https://threejs.org/docs/?q=orth#api/en/cameras/OrthographicCamera
+// Note about lighting:
+// - Directional light 'sun' provides sharp, directional shadows like sunlight.
+// - Shadow map resolution is set high; if you experience performance issues
+//   consider reducing mapSize to 1024 or 2048.
+// - normalBias helps with shadow acne but may produce small shadow detachment
+//   if too large. Tweak per-model if you see artifacts.
+
+// Camera setup
+// Math summary (orthographic frustum):
+// - aspect = width / height
+// - halfHeight = 50 (world units)
+// - left = -aspect * halfHeight, right = aspect * halfHeight
+// - top = halfHeight, bottom = -halfHeight
+// These values define an orthographic projection box (no perspective
+// foreshortening). Near/far define the visible depth range in world units.
+// We later use camera.zoom to scale the visible area. Call updateProjectionMatrix()
+// after changing frustum or zoom so the camera's projection matrix is recomputed.
+// We keep a `cameraOffset` vector to compute a follow-camera position relative
+// to the character each frame.
+// We treat 1 world unit as the base unit for physics and geometry; tuning
+// constants (gravity, jump, speeds) are in these world units.
 const aspect = sizes.width / sizes.height;
 const camera = new THREE.OrthographicCamera(
   -aspect * 50,
@@ -333,15 +398,22 @@ const camera = new THREE.OrthographicCamera(
   1000
 );
 
+// Position the camera above and behind the scene center. We keep a
+// cameraOffset vector so the follow-camera math in the animation loop
+// can compute the camera's target relative to the character.
 camera.position.x = -13;
 camera.position.y = 39;
 camera.position.z = -67;
 
 const cameraOffset = new THREE.Vector3(-13, 39, -67);
 
+// Zoom controls how large objects appear; updateProjectionMatrix() must be
+// called after changing frustum or zoom values to apply them.
 camera.zoom = 2.2;
 camera.updateProjectionMatrix();
 
+// OrbitControls are handy for debugging and camera inspection. We update
+// them once here — they're left enabled so you can rotate/zoom with mouse.
 const controls = new OrbitControls(camera, canvas);
 controls.update();
 
@@ -487,14 +559,24 @@ function handleInteraction() {
 }
 
 function onMouseMove(event) {
+  // Map DOM pixel coordinates to Normalized Device Coordinates (NDC):
+  // NDC X = (clientX / width) * 2 - 1 -> maps [0,width] to [-1,1]
+  // NDC Y = -(clientY / height) * 2 + 1 -> maps [0,height] to [1,-1]
+  // The Y is negated because DOM Y grows downward while NDC Y grows upward.
   pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
   pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
   touchHappened = false;
 }
 
 function onTouchEnd(event) {
-  pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-  pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  // Touch events don't always expose clientX/clientY directly; prefer
+  // changedTouches for robust values. If changedTouches is not present
+  // fall back to event.clientX/clientY for pointer event compatibility.
+  const x = event.changedTouches ? event.changedTouches[0].clientX : event.clientX;
+  const y = event.changedTouches ? event.changedTouches[0].clientY : event.clientY;
+
+  pointer.x = (x / window.innerWidth) * 2 - 1;
+  pointer.y = -(y / window.innerHeight) * 2 + 1;
 
   touchHappened = true;
   handleInteraction();
@@ -531,18 +613,36 @@ function playerCollisions() {
   }
 }
 
+// capsuleIntersect returns info about penetration depth and normal. We
+// resolve penetration by translating the capsule out of geometry along the
+// collision normal. This keeps the player from sinking into the world.
+
 function updatePlayer() {
   if (!character.instance) return;
+
+  // Math summary (integration):
+  // - We use semi-explicit Euler integration with a fixed timestep proxy dt
+  //   (0.035). If v is velocity and a is acceleration (gravity), then:
+  //     v += a * dt
+  //     x += v * dt
+  // - Here GRAVITY is treated as acceleration in world-units/sec^2; dt is
+  //   the scalar 0.035 used throughout. For stable physics across variable
+  //   frame rates prefer computing a real dt from timestamps instead.
 
   if (character.instance.position.y < -20) {
     respawnCharacter();
     return;
   }
 
+  // Integrate gravity when player is airborne. The magic scalar 0.035 is
+  // a fixed timestep proxy; for more stable physics across variable frame
+  // rates consider measuring deltaTime in the animation loop and using
+  // that instead.
   if (!playerOnFloor) {
     playerVelocity.y -= GRAVITY * 0.035;
   }
 
+  // Translate the capsule by velocity scaled by timestep.
   playerCollider.translate(playerVelocity.clone().multiplyScalar(0.035));
 
   playerCollisions();
@@ -550,13 +650,21 @@ function updatePlayer() {
   character.instance.position.copy(playerCollider.start);
   character.instance.position.y -= CAPSULE_RADIUS;
 
+  // Math summary (angle wrapping):
+  // - We need the minimal signed angular difference between targetRotation
+  //   and the current rotation (in radians). Angles wrap every 2*PI, so a
+  //   naive subtraction may produce values outside [-PI, PI]. The expression
+  //   below wraps the difference into (-PI, PI] which represents the shortest
+  //   rotation direction and magnitude.
   let rotationDiff =
     ((((targetRotation - character.instance.rotation.y) % (2 * Math.PI)) +
       3 * Math.PI) %
       (2 * Math.PI)) -
     Math.PI;
   let finalRotation = character.instance.rotation.y + rotationDiff;
-
+  // Smoothly interpolate the yaw (Y rotation) toward the targetRotation.
+  // The wrapping math above ensures the shortest rotation path across
+  // the -PI..PI boundary. Lerp factor 0.4 gives a soft, eased rotation.
   character.instance.rotation.y = THREE.MathUtils.lerp(
     character.instance.rotation.y,
     finalRotation,
@@ -762,7 +870,14 @@ function handleContinuousMovement() {
   }
 }
 
+// Notes on movement:
+// - Movement applies an impulse to playerVelocity and sets a short
+//   jump impulse so the character visibly hops when starting to move.
+// - `character.isMoving` prevents repeated impulses until collisions
+//   or other logic reset the state.
+
 Object.entries(mobileControls).forEach(([direction, element]) => {
+  // Bind both touch and mouse events so the controls work on mobile and desktop
   element.addEventListener("touchstart", (e) => {
     e.preventDefault();
     pressedButtons[direction] = true;
@@ -840,7 +955,10 @@ function animate() {
     intersectObject = "";
   }
 
-  for (let i = 0; i < intersects.length; i++) {
+  // If there are intersections, prefer the first hit. The loop below was
+  // redundant (always reading index 0) so we explicitly choose the first
+  // intersected object's parent name when available.
+  if (intersects.length > 0) {
     intersectObject = intersects[0].object.parent.name;
   }
 
